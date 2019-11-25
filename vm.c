@@ -339,6 +339,7 @@ copyuvm(pde_t *pgdir, uint sz)
       goto bad;
     }
   }
+  lcr3(V2P(pgdir));
   return d;
 
 bad:

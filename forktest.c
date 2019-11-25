@@ -18,10 +18,10 @@ forktest(void)
 {
   int n, pid;
 
-  printf(1, "fork test\n");
+  printf(1, "vfork test\n");
 
   for(n=0; n<N; n++){
-    pid = fork();
+    pid = vfork();
     if(pid < 0)
       break;
     if(pid == 0)

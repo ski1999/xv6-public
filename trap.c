@@ -12,6 +12,8 @@
 struct gatedesc idt[256];
 extern uint vectors[];  // in vectors.S: array of 256 entry pointers
 struct spinlock tickslock;
+extern int count[];
+
 uint ticks;
 
 void
@@ -77,6 +79,13 @@ trap(struct trapframe *tf)
             cpuid(), tf->cs, tf->eip);
     lapiceoi();
     break;
+  case T_PGFLT:
+    cprintf("ERR: %d\n", tf->err);
+    cprintf("PID: %d\n", myproc()->pid);
+    if (tf->err & 0x2) {
+      trap_writable();
+      break;
+    }
 
   //PAGEBREAK: 13
   default:

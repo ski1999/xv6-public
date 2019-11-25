@@ -6,9 +6,11 @@
 #include "mmu.h"
 #include "proc.h"
 #include "elf.h"
+#include "spinlock.h"
 
 extern char data[];  // defined by kernel.ld
 pde_t *kpgdir;  // for use in scheduler()
+struct spinlock countspin;
 
 // Set up CPU's kernel segment descriptors.
 // Run once on entry on each CPU.
@@ -32,7 +34,7 @@ seginit(void)
 // Return the address of the PTE in page table pgdir
 // that corresponds to virtual address va.  If alloc!=0,
 // create any required page table pages.
-static pte_t *
+pte_t *
 walkpgdir(pde_t *pgdir, const void *va, int alloc)
 {
   pde_t *pde;
@@ -344,6 +346,75 @@ bad:
   return 0;
 }
 
+int count[PHYSTOP/PGSIZE] = {0,};
+
+pde_t*
+vfork_cpypt(pde_t *pgdir, uint sz)
+{
+ uint i, pa, flags;
+ pde_t *d;
+ pte_t *pte;
+
+ if((d = setupkvm())==0)
+   return 0;
+ for (i = 0; i < sz; i += PGSIZE){
+     if((pte = walkpgdir(pgdir, (void *) i, 0)) == 0)
+	panic("copyuvm : pte should exist");
+     if(!(*pte & PTE_P))
+       panic("copyuvm: page not present");
+     pa = PTE_ADDR(*pte);
+     flags = PTE_FLAGS(*pte);
+     *pte = *pte & ~PTE_W;
+     if(mappages(d, (void*)i, PGSIZE, pa ,flags | PTE_P) < 0)
+       goto bad;
+
+     acquire(&countspin);
+     count[pa/PGSIZE] += 1;
+     release(&countspin);
+
+     lcr3(V2P(pgdir));
+ }
+ cprintf("cpypt done\n");
+ return d;
+ bad:
+  freevm(d);
+  return 0;
+}
+
+int
+trap_writable(void)
+{
+    uint pa, flags;
+    pte_t *pte;
+    pte = walkpgdir(myproc()->pgdir, (void*)rcr2(), 0);
+    pa = PTE_ADDR(*pte);
+
+    cprintf("trap start\n");
+
+    acquire(&countspin);
+    if(count[pa/PGSIZE] > 0) {
+      cprintf("Alloc: %d\n", count[pa/PGSIZE]);
+      void *mem = kalloc();
+      memmove(mem, P2V(pa), PGSIZE);
+      flags = PTE_FLAGS(*pte);
+      count[pa/PGSIZE] -= 1;
+      cprintf("C-: %d\n", count[pa/PGSIZE]);
+      *pte = V2P(mem) | flags | PTE_W | PTE_P;
+      cprintf("Alloc done\n");
+    }
+    else if (count[pa/PGSIZE] == 0) {
+      cprintf("Lonely parent\n");
+      *pte = *pte | PTE_W;
+    }
+    else
+    {
+      panic("aaaaargh\n");
+    }
+    release(&countspin);
+    cprintf("trap end\n");
+    return 0;
+}
+
 //PAGEBREAK!
 // Map user virtual address to kernel address.
 char*
@@ -391,4 +462,19 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
 // Blank page.
 //PAGEBREAK!
 // Blank page.
+
+int 
+getpaddr(int va)
+{
+  pte_t *pte;
+  uint pa;
+  pde_t *pgdir;
+
+  pgdir = myproc()->pgdir;
+
+  pte = walkpgdir(pgdir, (void*)va, 0);
+  pa = *pte & ~0xFFF;
+  
+  return pa;
+}
 

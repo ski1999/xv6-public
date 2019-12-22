@@ -286,6 +286,7 @@ int
 sys_open(void)
 {
   char *path;
+  char addr[2048];
   int fd, omode;
   struct file *f;
   struct inode *ip;
@@ -294,14 +295,14 @@ sys_open(void)
     return -1;
 
   begin_op();
-
-  if(omode & O_CREATE){
+ if(omode & O_CREATE){
     ip = create(path, T_FILE, 0, 0);
     if(ip == 0){
       end_op();
       return -1;
     }
-  } else {
+  } 
+ else {
     if((ip = namei(path)) == 0){
       end_op();
       return -1;
@@ -313,7 +314,16 @@ sys_open(void)
       return -1;
     }
   }
-
+  if(ip->type == T_SLINK){
+    readi(ip, addr, 0, 2048);
+    iunlockput(ip);
+    if((ip = namei(addr)) == 0){
+      end_op();
+      return -1;
+    }
+    ilock(ip);
+  }
+ 
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
     if(f)
       fileclose(f);
@@ -399,6 +409,8 @@ sys_exec(void)
   char *path, *argv[MAXARG];
   int i;
   uint uargv, uarg;
+  struct inode *ip;
+  char addr[2048];
 
   if(argstr(0, &path) < 0 || argint(1, (int*)&uargv) < 0){
     return -1;
@@ -416,6 +428,23 @@ sys_exec(void)
     if(fetchstr(uarg, &argv[i]) < 0)
       return -1;
   }
+    if((ip = namei(path)) == 0){
+      end_op();
+      return -1;
+    }
+
+  ilock(ip);
+  if(ip->valid && ip->type == T_SLINK){
+    readi(ip, addr, 0, 2048);
+    iunlock(ip);
+    if((ip = namei(addr)) == 0){
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
+    return exec(addr, argv);
+  }
+  iunlock(ip);
   return exec(path, argv);
 }
 
@@ -442,3 +471,43 @@ sys_pipe(void)
   fd[1] = fd1;
   return 0;
 }
+
+int
+sys_slink(void)
+{
+  struct file *f;
+  struct inode *ip;
+  char *src, *dst;
+
+  if(argstr(0, &src) < 0 || argstr(1, &dst) < 0)
+    return -1;
+
+  begin_op();
+
+  ip = create(dst, T_SLINK, 0, 0);
+  if(ip == 0){
+    end_op();
+    return -1;
+  }
+  
+  if((f = filealloc()) == 0){
+    if(f)
+      fileclose(f);
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+  iunlock(ip);
+  end_op();
+ 
+  f->type = FD_INODE;
+  f->ip = ip;
+  f->off = 0;
+  f->readable = 1;
+  f->writable = 1;
+
+  filewrite(f, src, strlen(src)+1);
+
+  return 0;
+}
+
